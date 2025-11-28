@@ -12,6 +12,36 @@ from ..models.rules import BandwidthRule, RuleConfig
 
 router = APIRouter()
 
+
+def sanitize_container_name(name: str) -> str:
+    """
+    Sanitize a name for use in Docker container/network names.
+    Docker requires: [a-zA-Z0-9][a-zA-Z0-9_.-]*
+
+    Args:
+        name: Original name (may contain spaces or special characters)
+
+    Returns:
+        Sanitized name safe for Docker
+    """
+    import re
+
+    # Replace spaces with hyphens
+    sanitized = name.replace(' ', '-')
+
+    # Remove any characters not in [a-zA-Z0-9_.-]
+    sanitized = re.sub(r'[^a-zA-Z0-9_.-]', '', sanitized)
+
+    # Ensure it starts with alphanumeric (remove leading dots/hyphens)
+    sanitized = re.sub(r'^[^a-zA-Z0-9]+', '', sanitized)
+
+    # If empty after sanitization, use 'device'
+    if not sanitized:
+        sanitized = 'device'
+
+    return sanitized
+
+
 # Service instances
 metrics_collector = MetricsCollector()
 router_manager = RouterManager()
@@ -447,10 +477,14 @@ async def create_device(device: DeviceCreate) -> Dict:
         # Calculate network config based on existing device count
         octet, subnet = db_service.get_next_available_network(device.cluster_id)
 
+        # Sanitize names for Docker (no spaces allowed)
+        safe_cluster_name = sanitize_container_name(cluster.name)
+        safe_device_name = sanitize_container_name(device.name)
+
         network_config = {
             "subnet": subnet,
-            "network_name": f"qc_net_{cluster.name}_{device.name}",
-            "container_name": f"qc_{cluster.name}_{device.name}",
+            "network_name": f"qc_net_{safe_cluster_name}_{safe_device_name}",
+            "container_name": f"qc_{safe_cluster_name}_{safe_device_name}",
             "device_ip": f"10.{octet}.0.10",
             "router_ip": f"10.{octet}.0.254",
         }
