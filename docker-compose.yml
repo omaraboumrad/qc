@@ -14,69 +14,8 @@ services:
     networks:
       management:
         ipv4_address: 172.20.0.2
-      net_pc1:
-        ipv4_address: 10.1.0.254
-      net_pc2:
-        ipv4_address: 10.2.0.254
-      net_mb1:
-        ipv4_address: 10.3.0.254
-      net_mb2:
-        ipv4_address: 10.4.0.254
     volumes:
       - router_config:/config/rules
-    restart: unless-stopped
-
-  # Client containers
-  pc1:
-    build:
-      context: ./clients
-      dockerfile: Dockerfile
-    container_name: pc1
-    hostname: pc1
-    environment:
-      - ROUTER_IP=10.1.0.254
-    networks:
-      net_pc1:
-        ipv4_address: 10.1.0.10
-    restart: unless-stopped
-
-  pc2:
-    build:
-      context: ./clients
-      dockerfile: Dockerfile
-    container_name: pc2
-    hostname: pc2
-    environment:
-      - ROUTER_IP=10.2.0.254
-    networks:
-      net_pc2:
-        ipv4_address: 10.2.0.10
-    restart: unless-stopped
-
-  mb1:
-    build:
-      context: ./clients
-      dockerfile: Dockerfile
-    container_name: mb1
-    hostname: mb1
-    environment:
-      - ROUTER_IP=10.3.0.254
-    networks:
-      net_mb1:
-        ipv4_address: 10.3.0.10
-    restart: unless-stopped
-
-  mb2:
-    build:
-      context: ./clients
-      dockerfile: Dockerfile
-    container_name: mb2
-    hostname: mb2
-    environment:
-      - ROUTER_IP=10.4.0.254
-    networks:
-      net_mb2:
-        ipv4_address: 10.4.0.10
     restart: unless-stopped
 
   # InfluxDB for time-series metrics storage
@@ -156,30 +95,8 @@ networks:
       config:
         - subnet: 172.20.0.0/24
 
-  # Dedicated networks for each client-router connection
-  net_pc1:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 10.1.0.0/24
-
-  net_pc2:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 10.2.0.0/24
-
-  net_mb1:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 10.3.0.0/24
-
-  net_mb2:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 10.4.0.0/24
+  # NOTE: Client networks are now created dynamically by the backend
+  # when devices are synced. See ClusterManager UI to create devices.
 
 volumes:
   router_config:

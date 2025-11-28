@@ -1,6 +1,6 @@
 import json
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 from ..utils.docker_exec import DockerExecutor
 from ..utils.parsers import (
     parse_tc_class_stats,
@@ -16,35 +16,50 @@ from ..models.metrics import (
     Connection,
     TrafficRule
 )
+from .database import DatabaseService
 
 
 class MetricsCollector:
-    """Collect metrics from router container"""
+    """Collect metrics from router container - now supports dynamic devices"""
 
-    def __init__(self):
+    def __init__(self, db_service: Optional[DatabaseService] = None):
         self.docker = DockerExecutor()
         self.previous_bytes = {}  # Track bytes for bandwidth calculation
         self.previous_timestamps = {}  # Track timestamps for accurate interval calculation
-        self.ifb_mapping = self._build_ifb_mapping()
+        self.db = db_service or DatabaseService(db_path="qc.db", echo=False)
+        self._owns_db = db_service is None
 
-    def _build_ifb_mapping(self) -> Dict[str, str]:
+    def close(self):
+        """Close database connection if we own it."""
+        if self._owns_db and self.db:
+            self.db.close()
+
+    def _get_running_devices(self):
+        """Get all running devices from active clusters."""
+        return self.db.get_all_active_cluster_devices()
+
+    def _build_device_mappings(self):
         """
-        Build IFB device mapping dynamically based on detected client interfaces.
-        Maps each client interface to a unique IFB device.
+        Build device mappings dynamically from database.
+
+        Returns:
+            Tuple of (interface_to_device, ip_to_device, interface_to_ifb)
         """
-        from ..utils.parsers import parse_interface_name_to_client
+        devices = self._get_running_devices()
 
-        mapping = {}
-        ifb_counter = 1
+        interface_to_device = {}
+        ip_to_device = {}
+        interface_to_ifb = {}
 
-        # Build mapping for all potential interfaces
-        for iface in ['eth0', 'eth1', 'eth2', 'eth3', 'eth4']:
-            client = parse_interface_name_to_client(iface)
-            if client != 'unknown':
-                mapping[iface] = f'ifb{ifb_counter}'
-                ifb_counter += 1
+        for device in devices:
+            if device.status == 'running' and device.interface_name:
+                interface_to_device[device.interface_name] = device
+                ip_to_device[device.ip_address] = device
 
-        return mapping
+                if device.ifb_device:
+                    interface_to_ifb[device.interface_name] = device.ifb_device
+
+        return interface_to_device, ip_to_device, interface_to_ifb
 
     async def collect_tc_stats(self, interface: str) -> Dict:
         """Collect traffic control statistics for an interface"""
@@ -117,21 +132,23 @@ class MetricsCollector:
             classes=classes
         )
 
-    async def collect_interface_stats(self, interface: str) -> InterfaceStats:
+    async def collect_interface_stats(self, interface: str, device_name: str, ifb_device: Optional[str] = None) -> InterfaceStats:
         """
         Collect bidirectional statistics for a single interface
+
+        Args:
+            interface: Router interface name (e.g., eth5)
+            device_name: Device name from database
+            ifb_device: IFB device name for upstream (optional)
 
         Returns stats for both downstream (router→client) and upstream (client→router)
         Also includes legacy fields for backward compatibility
         """
-        client = parse_interface_name_to_client(interface)
-
         # Collect downstream stats (physical interface)
         downstream = await self.collect_directional_stats(interface, f"{interface}_down")
 
         # Collect upstream stats (IFB device)
         upstream = None
-        ifb_device = self.ifb_mapping.get(interface)
         if ifb_device:
             try:
                 upstream = await self.collect_directional_stats(ifb_device, f"{ifb_device}_up")
@@ -141,7 +158,7 @@ class MetricsCollector:
 
         return InterfaceStats(
             name=interface,
-            client=client,
+            client=device_name,
             # New bidirectional fields
             downstream=downstream,
             upstream=upstream,
@@ -154,15 +171,17 @@ class MetricsCollector:
         )
 
     async def collect_connections(self) -> List[Connection]:
-        """Collect active iperf3 connections"""
-        # Use ss to get established connections on ports 5201-5204 (one per client)
-        # Need to wrap in sh -c for pipe to work
+        """Collect active iperf3 connections - now with dynamic device lookup"""
+        # Use ss to get established connections on iperf3 ports
         exit_code, output = self.docker.exec_router(
-            ["sh", "-c", "ss -tn state established '( dport = :5201 or sport = :5201 or dport = :5202 or sport = :5202 or dport = :5203 or sport = :5203 or dport = :5204 or sport = :5204 )' | tail -n +2"]
+            ["sh", "-c", "ss -tn state established '( dport >= :5201 and dport <= :5210 )' | tail -n +2"]
         )
 
         if exit_code != 0:
             return []
+
+        # Build IP to device mapping from database
+        _, ip_to_device, _ = self._build_device_mappings()
 
         connections = []
         parsed = parse_connections(output)
@@ -170,13 +189,10 @@ class MetricsCollector:
         for conn in parsed:
             # Extract client from IP
             remote_ip = conn['remote'].split(':')[0]
-            client_map = {
-                '10.1.0.10': 'pc1',
-                '10.2.0.10': 'pc2',
-                '10.3.0.10': 'mb1',
-                '10.4.0.10': 'mb2',
-            }
-            client = client_map.get(remote_ip, 'unknown')
+
+            # Look up device by IP
+            device = ip_to_device.get(remote_ip)
+            client = device.name if device else 'unknown'
 
             connections.append(Connection(
                 client=client,
@@ -189,14 +205,15 @@ class MetricsCollector:
         return connections
 
     async def collect_active_rules(self) -> List[TrafficRule]:
-        """Collect active traffic shaping rules (bidirectional)"""
+        """Collect active traffic shaping rules (bidirectional) - now with dynamic devices"""
         import re
         rules = []
 
-        # Check each interface for bidirectional rules
-        for interface in ['eth1', 'eth2', 'eth3', 'eth4']:
-            client = parse_interface_name_to_client(interface)
+        # Get device mappings from database
+        interface_to_device, _, interface_to_ifb = self._build_device_mappings()
 
+        # Check each running device interface for bidirectional rules
+        for interface, device in interface_to_device.items():
             # Get downstream configuration (physical interface, handle 1:30)
             downstream_rate = None
             downstream_ceil = None
@@ -215,7 +232,7 @@ class MetricsCollector:
             upstream_rate = None
             upstream_ceil = None
 
-            ifb_device = self.ifb_mapping.get(interface)
+            ifb_device = interface_to_ifb.get(interface)
             if ifb_device:
                 exit_code, output = self.docker.exec_router(f"tc class show dev {ifb_device}")
                 if exit_code == 0:
@@ -231,7 +248,7 @@ class MetricsCollector:
             if downstream_rate and downstream_ceil:
                 rules.append(TrafficRule(
                     interface=interface,
-                    client=client,
+                    client=device.name,
                     class_id='1:30',
                     downstream_rate=downstream_rate,
                     downstream_ceil=downstream_ceil,
@@ -246,16 +263,20 @@ class MetricsCollector:
         return rules
 
     async def collect_all(self) -> MetricsSnapshot:
-        """Collect all metrics"""
+        """Collect all metrics - now dynamically based on running devices"""
         interfaces = {}
 
-        # Collect stats for each client interface
-        for interface in ['eth1', 'eth2', 'eth3', 'eth4']:
+        # Get device mappings from database
+        interface_to_device, _, interface_to_ifb = self._build_device_mappings()
+
+        # Collect stats for each running device interface
+        for interface, device in interface_to_device.items():
             try:
-                stats = await self.collect_interface_stats(interface)
+                ifb_device = interface_to_ifb.get(interface)
+                stats = await self.collect_interface_stats(interface, device.name, ifb_device)
                 interfaces[interface] = stats
             except Exception as e:
-                print(f"Error collecting stats for {interface}: {e}")
+                print(f"Error collecting stats for {interface} ({device.name}): {e}")
 
         # Collect connections and rules
         connections = await self.collect_connections()

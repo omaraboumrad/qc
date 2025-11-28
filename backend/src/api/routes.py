@@ -1,8 +1,11 @@
 from fastapi import APIRouter, HTTPException
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from pydantic import BaseModel
 from ..services.metrics_collector import MetricsCollector
 from ..services.router_manager import RouterManager
+from ..services.database import DatabaseService
+from ..services.sync_service import SyncService
+from ..services.container_manager import ContainerManager
 from ..utils.docker_exec import DockerExecutor
 from ..models.metrics import MetricsSnapshot
 from ..models.rules import BandwidthRule, RuleConfig
@@ -13,6 +16,9 @@ router = APIRouter()
 metrics_collector = MetricsCollector()
 router_manager = RouterManager()
 docker_executor = DockerExecutor()
+db_service = DatabaseService(db_path="qc.db", echo=False)
+sync_service = SyncService(db_service=db_service)
+container_manager = ContainerManager()
 
 
 class TrafficControlRequest(BaseModel):
@@ -243,3 +249,358 @@ async def get_traffic_status() -> Dict[str, List[Dict]]:
         })
 
     return {"traffic_status": status_list}
+
+
+# ========== NEW ENDPOINTS: Dynamic Cluster & Device Management ==========
+
+# Request/Response Models
+class ClusterCreate(BaseModel):
+    """Request model for creating a cluster"""
+    name: str
+    description: str = ""
+    active: bool = False
+
+
+class ClusterUpdate(BaseModel):
+    """Request model for updating a cluster"""
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class DeviceCreate(BaseModel):
+    """Request model for creating a device"""
+    cluster_id: int
+    name: str
+    device_type: str = "pc"
+
+
+# ========== CLUSTER ENDPOINTS ==========
+
+@router.post("/clusters")
+async def create_cluster(cluster: ClusterCreate) -> Dict:
+    """Create a new cluster"""
+    try:
+        new_cluster = db_service.create_cluster(
+            name=cluster.name,
+            description=cluster.description,
+            active=cluster.active
+        )
+        return {
+            "id": new_cluster.id,
+            "name": new_cluster.name,
+            "description": new_cluster.description,
+            "active": new_cluster.active,
+            "created_at": new_cluster.created_at.isoformat() if new_cluster.created_at else None
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create cluster: {str(e)}")
+
+
+@router.get("/clusters")
+async def list_clusters(active_only: bool = False) -> List[Dict]:
+    """List all clusters"""
+    try:
+        clusters = db_service.list_clusters(active_only=active_only)
+        return [
+            {
+                "id": c.id,
+                "name": c.name,
+                "description": c.description,
+                "active": c.active,
+                "device_count": len(c.devices),
+                "created_at": c.created_at.isoformat() if c.created_at else None
+            }
+            for c in clusters
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list clusters: {str(e)}")
+
+
+@router.get("/clusters/{cluster_id}")
+async def get_cluster(cluster_id: int) -> Dict:
+    """Get cluster details with devices"""
+    try:
+        cluster = db_service.get_cluster(cluster_id)
+        if not cluster:
+            raise HTTPException(status_code=404, detail="Cluster not found")
+
+        return {
+            "id": cluster.id,
+            "name": cluster.name,
+            "description": cluster.description,
+            "active": cluster.active,
+            "devices": [
+                {
+                    "id": d.id,
+                    "name": d.name,
+                    "device_type": d.device_type,
+                    "ip_address": d.ip_address,
+                    "status": d.status,
+                    "interface_name": d.interface_name,
+                    "container_name": d.container_name
+                }
+                for d in cluster.devices
+            ],
+            "created_at": cluster.created_at.isoformat() if cluster.created_at else None
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get cluster: {str(e)}")
+
+
+@router.put("/clusters/{cluster_id}")
+async def update_cluster(cluster_id: int, update: ClusterUpdate) -> Dict:
+    """Update cluster properties"""
+    try:
+        success = db_service.update_cluster(
+            cluster_id=cluster_id,
+            name=update.name,
+            description=update.description
+        )
+        if not success:
+            raise HTTPException(status_code=404, detail="Cluster not found")
+        return {"status": "success", "cluster_id": cluster_id}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update cluster: {str(e)}")
+
+
+@router.delete("/clusters/{cluster_id}")
+async def delete_cluster(cluster_id: int) -> Dict:
+    """Delete cluster and all its devices"""
+    try:
+        success = db_service.delete_cluster(cluster_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Cluster not found")
+        return {"status": "success", "cluster_id": cluster_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete cluster: {str(e)}")
+
+
+@router.post("/clusters/{cluster_id}/activate")
+async def activate_cluster(cluster_id: int) -> Dict:
+    """Activate a cluster (multi-cluster: doesn't deactivate others)"""
+    try:
+        success = db_service.activate_cluster(cluster_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Cluster not found")
+        return {"status": "success", "cluster_id": cluster_id, "active": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to activate cluster: {str(e)}")
+
+
+@router.post("/clusters/{cluster_id}/deactivate")
+async def deactivate_cluster(cluster_id: int) -> Dict:
+    """Deactivate a cluster"""
+    try:
+        success = db_service.deactivate_cluster(cluster_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Cluster not found")
+        return {"status": "success", "cluster_id": cluster_id, "active": False}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to deactivate cluster: {str(e)}")
+
+
+# ========== DEVICE ENDPOINTS ==========
+
+@router.post("/devices")
+async def create_device(device: DeviceCreate) -> Dict:
+    """Create a device in a cluster"""
+    try:
+        cluster = db_service.get_cluster(device.cluster_id)
+        if not cluster:
+            raise HTTPException(status_code=404, detail="Cluster not found")
+
+        # Calculate network config based on existing device count
+        octet, subnet = db_service.get_next_available_network(device.cluster_id)
+
+        network_config = {
+            "subnet": subnet,
+            "network_name": f"qc_net_{cluster.name}_{device.name}",
+            "container_name": f"qc_{cluster.name}_{device.name}",
+            "device_ip": f"10.{octet}.0.10",
+            "router_ip": f"10.{octet}.0.254",
+        }
+
+        new_device = db_service.create_device(
+            cluster_id=device.cluster_id,
+            name=device.name,
+            device_type=device.device_type,
+            network_config=network_config
+        )
+
+        return {
+            "id": new_device.id,
+            "name": new_device.name,
+            "device_type": new_device.device_type,
+            "cluster_id": new_device.cluster_id,
+            "ip_address": new_device.ip_address,
+            "container_name": new_device.container_name,
+            "status": new_device.status
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create device: {str(e)}")
+
+
+@router.get("/devices")
+async def list_devices(cluster_id: Optional[int] = None) -> List[Dict]:
+    """List devices, optionally filtered by cluster"""
+    try:
+        if cluster_id:
+            devices = db_service.get_cluster_devices(cluster_id)
+        else:
+            devices = db_service.get_all_active_cluster_devices()
+
+        return [
+            {
+                "id": d.id,
+                "cluster_id": d.cluster_id,
+                "name": d.name,
+                "device_type": d.device_type,
+                "ip_address": d.ip_address,
+                "container_name": d.container_name,
+                "status": d.status,
+                "interface_name": d.interface_name,
+                "error_message": d.error_message
+            }
+            for d in devices
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list devices: {str(e)}")
+
+
+@router.get("/devices/{device_id}")
+async def get_device(device_id: int) -> Dict:
+    """Get device details"""
+    try:
+        device = db_service.get_device(device_id)
+        if not device:
+            raise HTTPException(status_code=404, detail="Device not found")
+
+        return {
+            "id": device.id,
+            "cluster_id": device.cluster_id,
+            "name": device.name,
+            "device_type": device.device_type,
+            "ip_address": device.ip_address,
+            "router_ip": device.router_ip,
+            "container_name": device.container_name,
+            "network_name": device.network_name,
+            "status": device.status,
+            "interface_name": device.interface_name,
+            "ifb_device": device.ifb_device,
+            "error_message": device.error_message
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get device: {str(e)}")
+
+
+@router.delete("/devices/{device_id}")
+async def delete_device(device_id: int) -> Dict:
+    """Delete a device"""
+    try:
+        success = db_service.delete_device(device_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Device not found")
+        return {"status": "success", "device_id": device_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete device: {str(e)}")
+
+
+# ========== SYNC ENDPOINTS ==========
+
+@router.get("/sync/preview")
+async def preview_sync(cluster_id: Optional[int] = None) -> Dict:
+    """Preview what sync would do without executing"""
+    try:
+        preview = sync_service.get_sync_preview(cluster_id=cluster_id)
+        return preview.to_dict()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to preview sync: {str(e)}")
+
+
+@router.post("/sync")
+async def sync_devices(cluster_id: Optional[int] = None) -> Dict:
+    """
+    Reconcile desired state (DB) with actual state (Docker).
+
+    If cluster_id not provided, syncs all active clusters.
+    """
+    try:
+        if cluster_id:
+            result = sync_service.sync_cluster(cluster_id)
+        else:
+            result = sync_service.sync_active_clusters()
+
+        return result.to_dict()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to sync: {str(e)}")
+
+
+# ========== CONTAINER MANAGEMENT ENDPOINTS ==========
+
+@router.get("/containers/status")
+async def get_container_status() -> Dict:
+    """Get status of all containers"""
+    try:
+        running = container_manager.get_running_containers()
+
+        # Get all devices from active clusters
+        active_devices = db_service.get_all_active_cluster_devices()
+
+        return {
+            "running_containers": running,
+            "devices": [
+                {
+                    "id": d.id,
+                    "name": d.name,
+                    "container_name": d.container_name,
+                    "status": d.status,
+                    "interface_name": d.interface_name,
+                    "error_message": d.error_message
+                }
+                for d in active_devices
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get container status: {str(e)}")
+
+
+@router.post("/containers/kill-all")
+async def kill_all_containers() -> Dict:
+    """Stop and remove all client containers (emergency shutdown)"""
+    try:
+        count, errors = container_manager.kill_all_client_containers()
+
+        # Update all device statuses to stopped
+        all_devices = db_service.get_all_active_cluster_devices()
+        for device in all_devices:
+            try:
+                db_service.update_device_status(
+                    device.id,
+                    "stopped",
+                    interface_name=None,
+                    ifb_device=None
+                )
+            except:
+                pass
+
+        return {
+            "status": "success",
+            "containers_killed": count,
+            "errors": errors
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to kill containers: {str(e)}")
