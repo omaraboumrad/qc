@@ -390,6 +390,11 @@ class SyncService:
                 print(f"  Detecting interface for {device.name}...")
                 interface_name = self.cm._detect_router_interface(device.router_ip)
                 if interface_name:
+                    # Ensure iperf3 server is running for this device
+                    interface_num = interface_name.replace('eth', '') if 'eth' in interface_name else '1'
+                    port = 5200 + int(interface_num)
+                    self._ensure_iperf3_server(port)
+
                     self.db.update_device_status(
                         device_id=device.id,
                         status="running",
@@ -407,7 +412,40 @@ class SyncService:
                 result.updated.append(container_name)
                 print(f"  ✅ Updated status: {device.name} -> running")
 
+            # Ensure iperf3 server is running for existing devices
+            if device.interface_name:
+                interface_num = device.interface_name.replace('eth', '') if 'eth' in device.interface_name else '1'
+                port = 5200 + int(interface_num)
+                self._ensure_iperf3_server(port)
+
             result.kept.append(container_name)
+
+    def _ensure_iperf3_server(self, port: int):
+        """
+        Ensure an iperf3 server is running on the router for the given port.
+
+        Args:
+            port: Port number for iperf3 server
+        """
+        import docker
+
+        try:
+            client = docker.from_env()
+            router = client.containers.get('router')
+
+            # Check if iperf3 server is already running on this port
+            exit_code, output = router.exec_run(f"sh -c 'ps aux | grep \"iperf3 -s -p {port}\" | grep -v grep'")
+
+            if exit_code != 0 or not output.decode().strip():
+                # Server not running, start it
+                print(f"  Starting iperf3 server on router port {port}...")
+                router.exec_run(f"iperf3 -s -p {port} -D", detach=True)
+                print(f"    ✅ iperf3 server started on port {port}")
+            else:
+                print(f"    ℹ️  iperf3 server already running on port {port}")
+
+        except Exception as e:
+            print(f"    ⚠️  Failed to start iperf3 server on port {port}: {e}")
 
     def _create_device_safe(self, device: Device) -> Tuple[bool, str]:
         """
@@ -434,6 +472,12 @@ class SyncService:
 
             if success:
                 interface_name = result
+
+                # Start iperf3 server on router for this device
+                interface_num = interface_name.replace('eth', '') if 'eth' in interface_name else '1'
+                port = 5200 + int(interface_num)
+                self._ensure_iperf3_server(port)
+
                 # Update status to 'running'
                 db.update_device_status(
                     device_id=device.id,

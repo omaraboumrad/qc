@@ -242,8 +242,7 @@ async def start_traffic(request: TrafficControlRequest) -> Dict[str, str]:
         "status": "success",
         "message": f"Traffic started from {request.client} to router for {request.duration}s",
         "client": request.client,
-        "router_ip": router_ip,
-        "port": port
+        "router_ip": router_ip
     }
 
 
