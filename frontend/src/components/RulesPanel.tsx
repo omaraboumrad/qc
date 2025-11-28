@@ -312,28 +312,30 @@ export default function RulesPanel({ rules }: Props) {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-slate-700">
-                      <th className="text-center py-3 px-2 text-slate-300 font-medium">Status</th>
-                      <th className="text-left py-3 px-2 text-slate-300 font-medium">Device</th>
-                      <th className="text-center py-3 px-2 text-orange-400 font-medium" colSpan={2}>
+                      <th className="text-left py-2 px-2 text-slate-300 font-medium text-sm w-auto">Device</th>
+                      <th className="text-center py-2 px-2 text-slate-300 font-medium text-sm whitespace-nowrap">Status</th>
+                      <th className="text-center py-2 px-2 text-slate-300 font-medium text-sm whitespace-nowrap">Interface</th>
+                      <th className="text-center py-2 px-1 text-orange-400 font-medium text-sm whitespace-nowrap" colSpan={2}>
                         ↑ Upstream
                       </th>
-                      <th className="text-center py-3 px-2 text-green-400 font-medium" colSpan={2}>
+                      <th className="text-center py-2 px-1 text-green-400 font-medium text-sm whitespace-nowrap" colSpan={2}>
                         ↓ Downstream
                       </th>
-                      <th className="text-center py-3 px-2 text-purple-400 font-medium">
+                      <th className="text-center py-2 px-1 text-purple-400 font-medium text-sm whitespace-nowrap">
                         Traffic
                       </th>
-                      <th className="text-center py-3 px-2 text-slate-300 font-medium">Actions</th>
+                      <th className="text-center py-2 px-2 text-slate-300 font-medium text-sm whitespace-nowrap">Actions</th>
                     </tr>
                     <tr className="border-b border-slate-700 text-xs">
-                      <th className="py-2 px-2"></th>
-                      <th className="py-2 px-2"></th>
-                      <th className="text-center py-2 px-2 text-slate-400">Rate</th>
-                      <th className="text-center py-2 px-2 text-slate-400">Ceil</th>
-                      <th className="text-center py-2 px-2 text-slate-400">Rate</th>
-                      <th className="text-center py-2 px-2 text-slate-400">Ceil</th>
-                      <th className="text-center py-2 px-2 text-slate-400">Amount</th>
-                      <th className="py-2 px-2"></th>
+                      <th className="text-left py-1 px-2"></th>
+                      <th className="text-center py-1 px-2"></th>
+                      <th className="text-center py-1 px-2"></th>
+                      <th className="text-center py-1 px-1 text-slate-400 whitespace-nowrap">Rate</th>
+                      <th className="text-center py-1 px-1 text-slate-400 whitespace-nowrap">Ceil</th>
+                      <th className="text-center py-1 px-1 text-slate-400 whitespace-nowrap">Rate</th>
+                      <th className="text-center py-1 px-1 text-slate-400 whitespace-nowrap">Ceil</th>
+                      <th className="text-center py-1 px-1 text-slate-400 whitespace-nowrap">Amount</th>
+                      <th className="text-center py-1 px-2"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -365,79 +367,83 @@ export default function RulesPanel({ rules }: Props) {
 
                       return (
                         <tr key={device.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                          {/* Device */}
+                          <td className="py-1.5 px-2 text-left">
+                            <div className="font-medium text-blue-400">{device.name}</div>
+                          </td>
+
                           {/* Status */}
-                          <td className="py-3 px-2 text-center">
+                          <td className="py-1.5 px-2 text-center whitespace-nowrap">
                             <div className={`font-medium text-xs ${statusColor}`}>{statusText}</div>
                           </td>
 
-                          {/* Device */}
-                          <td className="py-3 px-2">
-                            <div className="font-medium text-blue-400">{device.name}</div>
-                            <div className="text-xs text-slate-500">{device.interface_name || 'no interface'}</div>
+                          {/* Interface */}
+                          <td className="py-1.5 px-2 text-center whitespace-nowrap">
+                            <div className="text-xs text-slate-400">{device.interface_name || '-'}</div>
                           </td>
 
                           {/* Upstream Rate */}
-                          <td className="py-3 px-2">
+                          <td className="py-1.5 px-1 text-center">
                             <input
                               type="text"
                               value={state.upRate}
                               onChange={(e) => updateClientState(device.name, 'upRate', e.target.value)}
                               placeholder="20mbit"
                               disabled={isDisabled}
-                              className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-center focus:outline-none focus:ring-1 focus:ring-orange-500 disabled:opacity-50"
+                              className="w-20 bg-slate-700 border border-slate-600 rounded px-1.5 py-0.5 text-white text-center text-sm focus:outline-none focus:ring-1 focus:ring-orange-500 disabled:opacity-50"
                             />
                           </td>
 
                           {/* Upstream Ceil */}
-                          <td className="py-3 px-2">
+                          <td className="py-1.5 px-1 text-center">
                             <input
                               type="text"
                               value={state.upCeil}
                               onChange={(e) => updateClientState(device.name, 'upCeil', e.target.value)}
                               placeholder="50mbit"
                               disabled={isDisabled}
-                              className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-center focus:outline-none focus:ring-1 focus:ring-orange-500 disabled:opacity-50"
+                              className="w-20 bg-slate-700 border border-slate-600 rounded px-1.5 py-0.5 text-white text-center text-sm focus:outline-none focus:ring-1 focus:ring-orange-500 disabled:opacity-50"
                             />
                           </td>
 
                           {/* Downstream Rate */}
-                          <td className="py-3 px-2">
+                          <td className="py-1.5 px-1 text-center">
                             <input
                               type="text"
                               value={state.downRate}
                               onChange={(e) => updateClientState(device.name, 'downRate', e.target.value)}
                               placeholder="20mbit"
                               disabled={isDisabled}
-                              className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-center focus:outline-none focus:ring-1 focus:ring-green-500 disabled:opacity-50"
+                              className="w-20 bg-slate-700 border border-slate-600 rounded px-1.5 py-0.5 text-white text-center text-sm focus:outline-none focus:ring-1 focus:ring-green-500 disabled:opacity-50"
                             />
                           </td>
 
                           {/* Downstream Ceil */}
-                          <td className="py-3 px-2">
+                          <td className="py-1.5 px-1 text-center">
                             <input
                               type="text"
                               value={state.downCeil}
                               onChange={(e) => updateClientState(device.name, 'downCeil', e.target.value)}
                               placeholder="50mbit"
                               disabled={isDisabled}
-                              className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-center focus:outline-none focus:ring-1 focus:ring-green-500 disabled:opacity-50"
+                              className="w-20 bg-slate-700 border border-slate-600 rounded px-1.5 py-0.5 text-white text-center text-sm focus:outline-none focus:ring-1 focus:ring-green-500 disabled:opacity-50"
                             />
                           </td>
 
                           {/* Traffic Amount */}
-                          <td className="py-3 px-2">
+                          <td className="py-1.5 px-1 text-center">
                             <input
                               type="text"
                               value={state.trafficAmount}
                               onChange={(e) => updateClientState(device.name, 'trafficAmount', e.target.value)}
                               placeholder="50M"
                               disabled={isDisabled}
-                              className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-center focus:outline-none focus:ring-1 focus:ring-purple-500 disabled:opacity-50"
+                              className="w-16 bg-slate-700 border border-slate-600 rounded px-1.5 py-0.5 text-white text-center text-sm focus:outline-none focus:ring-1 focus:ring-purple-500 disabled:opacity-50"
                             />
                           </td>
 
                           {/* Action Buttons */}
-                          <td className="py-3 px-2">
+                          <td className="py-1.5 px-2 text-center">
                             <div className="flex gap-1 justify-center">
                               <button
                                 onClick={() => handleApply(device)}
