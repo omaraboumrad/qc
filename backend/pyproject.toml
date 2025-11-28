@@ -1,0 +1,25 @@
+[project]
+name = "qc-backend"
+version = "0.1.0"
+description = "Network Traffic Shaping Playground Backend"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "sse-starlette>=1.8.0",
+    "docker>=7.0.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "influxdb-client>=1.38.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.25.0",
+]

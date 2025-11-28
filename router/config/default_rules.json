@@ -1,0 +1,51 @@
+{
+  "rules": [
+    {
+      "interface": "eth1",
+      "client": "pc1",
+      "class": "1:30",
+      "rate": "50mbit",
+      "ceil": "100mbit",
+      "priority": "medium",
+      "description": "Default bandwidth for PC1"
+    },
+    {
+      "interface": "eth2",
+      "client": "pc2",
+      "class": "1:30",
+      "rate": "50mbit",
+      "ceil": "100mbit",
+      "priority": "medium",
+      "description": "Default bandwidth for PC2"
+    },
+    {
+      "interface": "eth3",
+      "client": "mb1",
+      "class": "1:30",
+      "rate": "30mbit",
+      "ceil": "80mbit",
+      "priority": "low",
+      "description": "Default bandwidth for MB1"
+    },
+    {
+      "interface": "eth4",
+      "client": "mb2",
+      "class": "1:30",
+      "rate": "30mbit",
+      "ceil": "80mbit",
+      "priority": "low",
+      "description": "Default bandwidth for MB2"
+    }
+  ],
+  "qos_rules": [
+    {
+      "name": "ssh_high_priority",
+      "protocol": "tcp",
+      "port": 22,
+      "tos": "0x10",
+      "class": "1:10",
+      "enabled": false,
+      "description": "Mark SSH traffic as high priority"
+    }
+  ]
+}

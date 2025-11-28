@@ -1,0 +1,190 @@
+services:
+  # Router container - central hub for traffic shaping
+  router:
+    build:
+      context: ./router
+      dockerfile: Dockerfile
+    container_name: router
+    hostname: router
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      - net.ipv4.ip_forward=1
+    networks:
+      management:
+        ipv4_address: 172.20.0.2
+      net_pc1:
+        ipv4_address: 10.1.0.254
+      net_pc2:
+        ipv4_address: 10.2.0.254
+      net_mb1:
+        ipv4_address: 10.3.0.254
+      net_mb2:
+        ipv4_address: 10.4.0.254
+    volumes:
+      - router_config:/config/rules
+    restart: unless-stopped
+
+  # Client containers
+  pc1:
+    build:
+      context: ./clients
+      dockerfile: Dockerfile
+    container_name: pc1
+    hostname: pc1
+    environment:
+      - ROUTER_IP=10.1.0.254
+    networks:
+      net_pc1:
+        ipv4_address: 10.1.0.10
+    restart: unless-stopped
+
+  pc2:
+    build:
+      context: ./clients
+      dockerfile: Dockerfile
+    container_name: pc2
+    hostname: pc2
+    environment:
+      - ROUTER_IP=10.2.0.254
+    networks:
+      net_pc2:
+        ipv4_address: 10.2.0.10
+    restart: unless-stopped
+
+  mb1:
+    build:
+      context: ./clients
+      dockerfile: Dockerfile
+    container_name: mb1
+    hostname: mb1
+    environment:
+      - ROUTER_IP=10.3.0.254
+    networks:
+      net_mb1:
+        ipv4_address: 10.3.0.10
+    restart: unless-stopped
+
+  mb2:
+    build:
+      context: ./clients
+      dockerfile: Dockerfile
+    container_name: mb2
+    hostname: mb2
+    environment:
+      - ROUTER_IP=10.4.0.254
+    networks:
+      net_mb2:
+        ipv4_address: 10.4.0.10
+    restart: unless-stopped
+
+  # InfluxDB for time-series metrics storage
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: influxdb
+    hostname: influxdb
+    ports:
+      - "8086:8086"
+    networks:
+      management:
+        ipv4_address: 172.20.0.5
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+      - influxdb_config:/etc/influxdb2
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=adminpassword
+      - DOCKER_INFLUXDB_INIT_ORG=qc
+      - DOCKER_INFLUXDB_INIT_BUCKET=metrics
+      - DOCKER_INFLUXDB_INIT_RETENTION=30d
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=qc-dev-token-change-in-production
+    restart: unless-stopped
+
+  # Backend service - FastAPI with SSE
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: backend
+    hostname: backend
+    ports:
+      - "8000:8000"
+    networks:
+      management:
+        ipv4_address: 172.20.0.3
+    environment:
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=qc-dev-token-change-in-production
+      - INFLUXDB_ORG=qc
+      - INFLUXDB_BUCKET=metrics
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # Access to Docker daemon
+      - ./backend/src:/app/src  # Development hot-reload
+    depends_on:
+      - router
+      - influxdb
+    restart: unless-stopped
+
+  # Frontend service - React with Vite
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    hostname: frontend
+    ports:
+      - "3000:3000"
+    networks:
+      management:
+        ipv4_address: 172.20.0.4
+    environment:
+      - VITE_BACKEND_URL=http://localhost:8000
+    volumes:
+      - ./frontend/src:/app/src  # Development hot-reload
+      - ./frontend/public:/app/public
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+networks:
+  # Management network for backend access to all containers
+  management:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+  # Dedicated networks for each client-router connection
+  net_pc1:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.1.0.0/24
+
+  net_pc2:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.2.0.0/24
+
+  net_mb1:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.3.0.0/24
+
+  net_mb2:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.4.0.0/24
+
+volumes:
+  router_config:
+    driver: local
+  influxdb_data:
+    driver: local
+  influxdb_config:
+    driver: local
