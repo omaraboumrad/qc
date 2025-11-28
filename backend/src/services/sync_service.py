@@ -106,12 +106,28 @@ class SyncService:
             # Multi-cluster: get all devices from all active clusters
             desired_devices = self.db.get_all_active_cluster_devices()
 
-        # Get actual state (from Docker)
-        running_containers = self.cm.get_running_containers()
-        running_names = {c['name'] for c in running_containers}
-
         # Build desired container names
         desired_names = {d.container_name for d in desired_devices}
+
+        # Get actual state (from Docker)
+        all_running_containers = self.cm.get_running_containers()
+
+        # Filter to only containers belonging to the cluster(s) being synced
+        if cluster_id:
+            # Single cluster: only include containers from this cluster
+            running_names = set()
+            for container in all_running_containers:
+                device = self.db.get_device_by_container_name(container['name'])
+                if device and device.cluster_id == cluster_id:
+                    running_names.add(container['name'])
+        else:
+            # Multi-cluster: only include containers from active clusters
+            active_cluster_ids = {c.id for c in self.db.get_active_clusters()}
+            running_names = set()
+            for container in all_running_containers:
+                device = self.db.get_device_by_container_name(container['name'])
+                if device and device.cluster_id in active_cluster_ids:
+                    running_names.add(container['name'])
 
         # Calculate diff
         preview.to_create = sorted(list(desired_names - running_names))
@@ -151,15 +167,28 @@ class SyncService:
             print(f"  - {device.name} ({device.container_name})")
 
         # 3. Get actual running containers from Docker
-        running_containers = self.cm.get_running_containers()
+        all_running_containers = self.cm.get_running_containers()
+
+        # Filter to only containers belonging to THIS cluster
+        # (by checking if container name matches any device in this cluster)
+        desired_map = {d.container_name: d for d in desired_devices}
+        desired_names = set(desired_map.keys())
+
+        # Only consider running containers that belong to this cluster
+        running_containers = []
+        for container in all_running_containers:
+            container_name = container['name']
+            # Check if this container belongs to a device in this cluster
+            device = self.db.get_device_by_container_name(container_name)
+            if device and device.cluster_id == cluster_id:
+                running_containers.append(container)
+
         running_map = {c['name']: c for c in running_containers}
-        print(f"\nRunning QC containers: {len(running_containers)}")
+        print(f"\nRunning containers in this cluster: {len(running_containers)}")
         for container in running_containers:
             print(f"  - {container['name']} ({container['status']})")
 
-        # 4. Calculate diff
-        desired_map = {d.container_name: d for d in desired_devices}
-        desired_names = set(desired_map.keys())
+        # 4. Calculate diff (only within this cluster)
         running_names = set(running_map.keys())
 
         to_create = desired_names - running_names
