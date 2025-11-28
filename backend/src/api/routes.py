@@ -373,12 +373,39 @@ async def update_cluster(cluster_id: int, update: ClusterUpdate) -> Dict:
 
 @router.delete("/clusters/{cluster_id}")
 async def delete_cluster(cluster_id: int) -> Dict:
-    """Delete cluster and all its devices"""
+    """Delete cluster, destroy all its containers, and clean up networks"""
     try:
+        # Get cluster and its devices before deletion
+        cluster = db_service.get_cluster(cluster_id)
+        if not cluster:
+            raise HTTPException(status_code=404, detail="Cluster not found")
+
+        devices = db_service.get_cluster_devices(cluster_id)
+
+        # Destroy all containers for devices in this cluster
+        destroyed_count = 0
+        errors = []
+        for device in devices:
+            try:
+                success, error = container_manager.destroy_device_container(device)
+                if success:
+                    destroyed_count += 1
+                else:
+                    errors.append(f"{device.name}: {error}")
+            except Exception as e:
+                errors.append(f"{device.name}: {str(e)}")
+
+        # Now delete the cluster from database (cascades to devices)
         success = db_service.delete_cluster(cluster_id)
         if not success:
-            raise HTTPException(status_code=404, detail="Cluster not found")
-        return {"status": "success", "cluster_id": cluster_id}
+            raise HTTPException(status_code=500, detail="Failed to delete cluster from database")
+
+        return {
+            "status": "success",
+            "cluster_id": cluster_id,
+            "containers_destroyed": destroyed_count,
+            "errors": errors
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete cluster: {str(e)}")
 
@@ -509,12 +536,36 @@ async def get_device(device_id: int) -> Dict:
 
 @router.delete("/devices/{device_id}")
 async def delete_device(device_id: int) -> Dict:
-    """Delete a device"""
+    """Delete a device and destroy its container"""
     try:
+        # Get device before deletion
+        device = db_service.get_device(device_id)
+        if not device:
+            raise HTTPException(status_code=404, detail="Device not found")
+
+        # Destroy container if it exists
+        container_destroyed = False
+        error_message = None
+        try:
+            success, error = container_manager.destroy_device_container(device)
+            if success:
+                container_destroyed = True
+            else:
+                error_message = error
+        except Exception as e:
+            error_message = str(e)
+
+        # Delete from database
         success = db_service.delete_device(device_id)
         if not success:
-            raise HTTPException(status_code=404, detail="Device not found")
-        return {"status": "success", "device_id": device_id}
+            raise HTTPException(status_code=500, detail="Failed to delete device from database")
+
+        return {
+            "status": "success",
+            "device_id": device_id,
+            "container_destroyed": container_destroyed,
+            "error": error_message
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete device: {str(e)}")
 

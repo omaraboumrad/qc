@@ -329,6 +329,7 @@ class DatabaseService:
     def get_next_available_network(self, cluster_id: int) -> Tuple[int, str]:
         """
         Calculate next available network octet for a cluster.
+        Checks both database AND Docker to avoid conflicts with orphaned networks.
 
         Args:
             cluster_id: Cluster ID
@@ -336,19 +337,42 @@ class DatabaseService:
         Returns:
             Tuple of (octet, subnet) e.g., (1, "10.1.0.0/24")
         """
+        import docker
+
         # Get all existing devices across all clusters
         all_devices = self.session.query(Device).all()
 
-        # Extract octets from existing subnets
+        # Extract octets from existing subnets in database
         used_octets = set()
         for device in all_devices:
-            # Parse "10.X.0.0/24" to get X
-            parts = device.network_subnet.split('.')
-            if len(parts) >= 2:
-                try:
-                    used_octets.add(int(parts[1]))
-                except ValueError:
-                    pass
+            if device.network_subnet:
+                # Parse "10.X.0.0/24" to get X
+                parts = device.network_subnet.split('.')
+                if len(parts) >= 2:
+                    try:
+                        used_octets.add(int(parts[1]))
+                    except ValueError:
+                        pass
+
+        # Also check Docker for existing networks (to avoid orphaned network conflicts)
+        try:
+            client = docker.from_env()
+            networks = client.networks.list()
+            for network in networks:
+                # Check if network has IPAM config with 10.X.0.0/24 subnets
+                if network.attrs.get('IPAM') and network.attrs['IPAM'].get('Config'):
+                    for config in network.attrs['IPAM']['Config']:
+                        subnet = config.get('Subnet', '')
+                        if subnet.startswith('10.') and subnet.endswith('.0.0/24'):
+                            # Parse "10.X.0.0/24" to get X
+                            parts = subnet.split('.')
+                            if len(parts) >= 2:
+                                try:
+                                    used_octets.add(int(parts[1]))
+                                except ValueError:
+                                    pass
+        except Exception as e:
+            print(f"Warning: Could not check Docker networks: {e}")
 
         # Find first available octet (start from 1)
         for octet in range(1, 255):

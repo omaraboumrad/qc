@@ -117,7 +117,7 @@ export default function ClusterManager() {
   };
 
   const handleDeleteDevice = async (deviceId: number, deviceName: string) => {
-    if (!confirm(`Delete device "${deviceName}"? This will remove it from the database.`)) {
+    if (!confirm(`Delete device "${deviceName}"?\n\nThis will:\n1. Stop and remove the container\n2. Delete the device from the database\n\nAre you sure?`)) {
       return;
     }
 
@@ -125,8 +125,15 @@ export default function ClusterManager() {
     setError(null);
 
     try {
-      await apiService.deleteDevice(deviceId);
-      setSuccessMessage(`Device "${deviceName}" deleted successfully!`);
+      const result = await apiService.deleteDevice(deviceId);
+
+      if (result.container_destroyed) {
+        setSuccessMessage(`Device "${deviceName}" deleted and container destroyed successfully!`);
+      } else if (result.error) {
+        setSuccessMessage(`Device "${deviceName}" deleted from database, but container cleanup had an issue: ${result.error}`);
+      } else {
+        setSuccessMessage(`Device "${deviceName}" deleted successfully!`);
+      }
 
       if (selectedCluster) {
         await loadDevices(selectedCluster.id);
@@ -195,6 +202,62 @@ export default function ClusterManager() {
     }
   };
 
+  const handleDeleteCluster = async (cluster: Cluster) => {
+    if (!confirm(`Delete cluster "${cluster.name}" and all its devices?\n\nThis will:\n1. Stop and remove all containers in this cluster\n2. Delete all devices from the database\n3. Remove the cluster from the database\n\nAre you sure?`)) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const result = await apiService.deleteCluster(cluster.id);
+
+      if (result.errors && result.errors.length > 0) {
+        setSuccessMessage(`Cluster "${cluster.name}" deleted. Destroyed ${result.containers_destroyed} containers. ${result.errors.length} errors occurred.`);
+      } else {
+        setSuccessMessage(`Cluster "${cluster.name}" deleted successfully! Destroyed ${result.containers_destroyed} containers.`);
+      }
+
+      await loadClusters();
+      if (selectedCluster?.id === cluster.id) {
+        setSelectedCluster(null);
+        setDevices([]);
+      }
+
+      setTimeout(() => setSuccessMessage(null), 5000);
+    } catch (err: any) {
+      setError(`Failed to delete cluster: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleKillAllContainers = async () => {
+    if (!confirm('Kill ALL client containers?\n\nThis will:\n1. Stop and remove ALL QC client containers\n2. Update all device statuses to "stopped"\n3. Leave networks intact (they will be reused on next sync)\n\nAre you sure?')) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const result = await apiService.killAllContainers();
+      setSuccessMessage(`Killed ${result.containers_killed} containers successfully!`);
+
+      // Reload devices to show updated statuses
+      if (selectedCluster) {
+        await loadDevices(selectedCluster.id);
+      }
+
+      setTimeout(() => setSuccessMessage(null), 5000);
+    } catch (err: any) {
+      setError(`Failed to kill containers: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const getStatusColor = (status: Device['status']) => {
     switch (status) {
       case 'running': return 'bg-green-500';
@@ -208,14 +271,26 @@ export default function ClusterManager() {
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-8">
-      {/* Messages */}
+      {/* Fixed position alerts - won't shift content */}
       {error && (
-        <div className="mb-4 bg-red-900/20 border border-red-500 text-red-200 px-4 py-3 rounded">
+        <div className="fixed top-4 right-4 z-50 max-w-md bg-red-900/95 border border-red-500 text-red-200 px-4 py-3 rounded-lg shadow-lg">
+          <button
+            onClick={() => setError(null)}
+            className="float-right ml-3 text-red-300 hover:text-red-100"
+          >
+            ✕
+          </button>
           {error}
         </div>
       )}
       {successMessage && (
-        <div className="mb-4 bg-green-900/20 border border-green-500 text-green-200 px-4 py-3 rounded">
+        <div className="fixed top-4 right-4 z-50 max-w-md bg-green-900/95 border border-green-500 text-green-200 px-4 py-3 rounded-lg shadow-lg">
+          <button
+            onClick={() => setSuccessMessage(null)}
+            className="float-right ml-3 text-green-300 hover:text-green-100"
+          >
+            ✕
+          </button>
           {successMessage}
         </div>
       )}
@@ -228,12 +303,21 @@ export default function ClusterManager() {
             Manage device clusters and containers
           </p>
         </div>
-        <button
-          onClick={() => setShowCreateCluster(true)}
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium"
-        >
-          + New Cluster
-        </button>
+        <div className="flex space-x-3">
+          <button
+            onClick={handleKillAllContainers}
+            disabled={loading}
+            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium disabled:opacity-50"
+          >
+            Kill All Containers
+          </button>
+          <button
+            onClick={() => setShowCreateCluster(true)}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium"
+          >
+            + New Cluster
+          </button>
+        </div>
       </div>
 
       {/* Create Cluster Modal */}
@@ -362,7 +446,7 @@ export default function ClusterManager() {
                       : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
                   }`}
                 >
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between mb-2">
                     <div>
                       <div className="font-medium">{cluster.name}</div>
                       <div className="text-xs opacity-75">
@@ -383,6 +467,15 @@ export default function ClusterManager() {
                       {cluster.active ? 'Active' : 'Inactive'}
                     </button>
                   </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteCluster(cluster);
+                    }}
+                    className="w-full px-2 py-1 bg-red-600/20 hover:bg-red-600/40 text-red-300 rounded text-xs font-medium"
+                  >
+                    Delete Cluster
+                  </button>
                 </div>
               ))}
             </div>
