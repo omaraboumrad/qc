@@ -160,11 +160,7 @@ async def reset_rules() -> Dict[str, str]:
 @router.delete("/rules/{client}")
 async def delete_rule(client: str) -> Dict[str, str]:
     """Delete a traffic shaping rule (set to unlimited bandwidth)"""
-    valid_clients = ["pc1", "pc2", "mb1", "mb2"]
-
-    if client not in valid_clients:
-        raise HTTPException(status_code=400, detail=f"Invalid client: {client}")
-
+    # No validation needed - accept any client name from dynamic devices
     try:
         success = router_manager.delete_rule(client)
 
@@ -184,15 +180,20 @@ async def delete_rule(client: str) -> Dict[str, str]:
 
 @router.get("/clients")
 async def list_clients():
-    """List all client containers"""
-    return {
-        "clients": [
-            {"name": "pc1", "ip": "10.1.0.10", "interface": "eth1"},
-            {"name": "pc2", "ip": "10.2.0.10", "interface": "eth2"},
-            {"name": "mb1", "ip": "10.3.0.10", "interface": "eth3"},
-            {"name": "mb2", "ip": "10.4.0.10", "interface": "eth4"},
-        ]
-    }
+    """List all running device containers from database"""
+    running_devices = db_service.get_running_devices()
+
+    clients = []
+    for device in running_devices:
+        clients.append({
+            "name": device.name,
+            "ip": device.ip_address,
+            "interface": device.interface_name,
+            "cluster_id": device.cluster_id,
+            "status": device.status
+        })
+
+    return {"clients": clients}
 
 
 @router.post("/traffic/start")
@@ -202,28 +203,34 @@ async def start_traffic(request: TrafficControlRequest) -> Dict[str, str]:
 
     The client will send traffic for the specified duration
     """
-    client_config = {
-        "pc1": {"ip": "10.1.0.254", "port": 5201},
-        "pc2": {"ip": "10.2.0.254", "port": 5202},
-        "mb1": {"ip": "10.3.0.254", "port": 5203},
-        "mb2": {"ip": "10.4.0.254", "port": 5204},
-    }
+    # Find device by name in database
+    all_devices = db_service.get_running_devices()
+    device = None
+    for d in all_devices:
+        if d.name == request.client:
+            device = d
+            break
 
-    if request.client not in client_config:
-        raise HTTPException(status_code=400, detail=f"Invalid client: {request.client}")
+    if not device:
+        raise HTTPException(status_code=404, detail=f"Device '{request.client}' not found or not running")
 
-    config = client_config[request.client]
-    router_ip = config["ip"]
-    port = config["port"]
+    if not device.router_ip:
+        raise HTTPException(status_code=400, detail=f"Device '{request.client}' has no router IP configured")
+
+    # Use device's router IP and a dynamic port based on interface
+    router_ip = device.router_ip
+    # Extract interface number (eth5 -> 5) for port assignment
+    interface_num = device.interface_name.replace('eth', '') if device.interface_name else '1'
+    port = 5200 + int(interface_num)  # eth5 -> port 5205, eth6 -> port 5206, etc.
 
     # Stop any existing iperf3 process
-    docker_executor.exec_client(request.client, "sh -c 'pkill iperf3 || true'")
+    docker_executor.exec_command(device.container_name, "sh -c 'pkill iperf3 || true'")
 
     # Build iperf3 command with optional bandwidth limit
     # Use -R (reverse mode) so router sends to client, allowing us to measure downstream bandwidth
     bandwidth_flag = f" -b {request.bandwidth}" if request.bandwidth else ""
     cmd = f"nohup iperf3 -c {router_ip} -p {port} -t {request.duration} -R{bandwidth_flag} > /dev/null 2>&1 &"
-    exit_code, output = docker_executor.exec_client(request.client, f"sh -c '{cmd}'")
+    exit_code, output = docker_executor.exec_command(device.container_name, f"sh -c '{cmd}'")
 
     if exit_code != 0:
         raise HTTPException(
@@ -235,7 +242,8 @@ async def start_traffic(request: TrafficControlRequest) -> Dict[str, str]:
         "status": "success",
         "message": f"Traffic started from {request.client} to router for {request.duration}s",
         "client": request.client,
-        "router_ip": router_ip
+        "router_ip": router_ip,
+        "port": port
     }
 
 
@@ -244,13 +252,19 @@ async def stop_traffic(request: TrafficControlRequest) -> Dict[str, str]:
     """
     Stop iperf3 traffic on a client
     """
-    valid_clients = ["pc1", "pc2", "mb1", "mb2"]
+    # Find device by name in database
+    all_devices = db_service.get_running_devices()
+    device = None
+    for d in all_devices:
+        if d.name == request.client:
+            device = d
+            break
 
-    if request.client not in valid_clients:
-        raise HTTPException(status_code=400, detail=f"Invalid client: {request.client}")
+    if not device:
+        raise HTTPException(status_code=404, detail=f"Device '{request.client}' not found or not running")
 
     # Stop iperf3 process
-    exit_code, output = docker_executor.exec_client(request.client, "sh -c 'pkill iperf3 || true'")
+    exit_code, output = docker_executor.exec_command(device.container_name, "sh -c 'pkill iperf3 || true'")
 
     return {
         "status": "success",
@@ -262,21 +276,31 @@ async def stop_traffic(request: TrafficControlRequest) -> Dict[str, str]:
 @router.get("/traffic/status")
 async def get_traffic_status() -> Dict[str, List[Dict]]:
     """
-    Get status of iperf3 processes on all clients
+    Get status of iperf3 processes on all running devices
     """
-    clients = ["pc1", "pc2", "mb1", "mb2"]
+    # Get all running devices from database
+    running_devices = db_service.get_running_devices()
     status_list = []
 
-    for client in clients:
-        # Check if iperf3 is running
-        exit_code, output = docker_executor.exec_client(client, "pgrep iperf3")
-        is_running = exit_code == 0 and output.strip() != ""
+    for device in running_devices:
+        try:
+            # Check if iperf3 is running using container name
+            exit_code, output = docker_executor.exec_command(device.container_name, "pgrep iperf3")
+            is_running = exit_code == 0 and output.strip() != ""
 
-        status_list.append({
-            "client": client,
-            "active": is_running,
-            "pid": output.strip() if is_running else None
-        })
+            status_list.append({
+                "client": device.name,
+                "active": is_running,
+                "pid": output.strip() if is_running else None
+            })
+        except Exception as e:
+            # Container might not exist or be accessible
+            status_list.append({
+                "client": device.name,
+                "active": False,
+                "pid": None,
+                "error": str(e)
+            })
 
     return {"traffic_status": status_list}
 
