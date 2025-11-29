@@ -270,7 +270,7 @@ export default function ClusterManager() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-6 py-8">
+    <div className="max-w-7xl mx-auto py-8">
       {/* Fixed position alerts - won't shift content */}
       {error && (
         <div className="fixed top-4 right-4 z-50 max-w-md bg-red-900/95 border border-red-500 text-red-200 px-4 py-3 rounded-lg shadow-lg">
@@ -303,21 +303,13 @@ export default function ClusterManager() {
             Manage device clusters and containers
           </p>
         </div>
-        <div className="flex space-x-3">
-          <button
-            onClick={handleKillAllContainers}
-            disabled={loading}
-            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium disabled:opacity-50"
-          >
-            Kill All Containers
-          </button>
-          <button
-            onClick={() => setShowCreateCluster(true)}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium"
-          >
-            + New Cluster
-          </button>
-        </div>
+        <button
+          onClick={handleKillAllContainers}
+          disabled={loading}
+          className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-sm font-medium disabled:opacity-50"
+        >
+          Kill All Containers
+        </button>
       </div>
 
       {/* Create Cluster Modal */}
@@ -434,25 +426,33 @@ export default function ClusterManager() {
         {/* Clusters List */}
         <div className="lg:col-span-1">
           <div className="bg-slate-800 rounded-lg border border-slate-700 p-4">
-            <h3 className="text-lg font-semibold text-white mb-4">Clusters</h3>
-            <div className="space-y-2">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-white">Clusters</h3>
+              <button
+                onClick={() => setShowCreateCluster(true)}
+                className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium"
+              >
+                + New Cluster
+              </button>
+            </div>
+            <div className="space-y-1">
               {clusters.map((cluster) => (
                 <div
                   key={cluster.id}
                   onClick={() => setSelectedCluster(cluster)}
-                  className={`p-3 rounded-lg cursor-pointer transition-colors ${
+                  className={`p-3 cursor-pointer transition-colors flex items-center justify-between ${
                     selectedCluster?.id === cluster.id
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                      ? 'bg-blue-600/20 border-l-2 border-blue-500 text-white'
+                      : 'text-slate-300 hover:bg-slate-700/50'
                   }`}
                 >
-                  <div className="flex items-center justify-between mb-2">
-                    <div>
-                      <div className="font-medium">{cluster.name}</div>
-                      <div className="text-xs opacity-75">
-                        {cluster.device_count || 0} devices
-                      </div>
+                  <div>
+                    <div className="font-medium">{cluster.name}</div>
+                    <div className="text-xs opacity-75">
+                      {cluster.device_count || 0} devices
                     </div>
+                  </div>
+                  <div className="flex items-center gap-2">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -466,16 +466,18 @@ export default function ClusterManager() {
                     >
                       {cluster.active ? 'Active' : 'Inactive'}
                     </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteCluster(cluster);
+                      }}
+                      className="p-1 bg-red-600/20 hover:bg-red-600/40 text-red-300 rounded flex items-center justify-center"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
                   </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDeleteCluster(cluster);
-                    }}
-                    className="w-full px-2 py-1 bg-red-600/20 hover:bg-red-600/40 text-red-300 rounded text-xs font-medium"
-                  >
-                    Delete Cluster
-                  </button>
                 </div>
               ))}
             </div>
@@ -520,7 +522,7 @@ export default function ClusterManager() {
                   </h3>
                   <button
                     onClick={() => setShowCreateDevice(true)}
-                    className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-medium"
+                    className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium"
                   >
                     + Add Device
                   </button>
@@ -531,22 +533,22 @@ export default function ClusterManager() {
                     No devices yet. Click "Add Device" to create one.
                   </div>
                 ) : (
-                  <div className="space-y-3">
+                  <div className="space-y-1">
                     {devices.map((device) => (
                       <div
                         key={device.id}
-                        className="bg-slate-700 rounded-lg p-4"
+                        className="p-3 hover:bg-slate-700/50 transition-colors"
                       >
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
-                            <div className="flex items-center space-x-3 mb-2">
+                            <div className="flex items-center space-x-3 mb-1">
                               <div className={`h-3 w-3 rounded-full ${getStatusColor(device.status)}`}></div>
                               <div className="font-medium text-white">{device.name}</div>
                               <span className="text-xs bg-slate-600 px-2 py-1 rounded text-slate-300">
                                 {device.device_type}
                               </span>
                             </div>
-                            <div className="text-sm text-slate-400 space-y-1">
+                            <div className="text-xs text-slate-400 ml-6 space-y-0.5">
                               <div>IP: {device.ip_address}</div>
                               <div>Container: {device.container_name}</div>
                               {device.interface_name && (
@@ -559,9 +561,11 @@ export default function ClusterManager() {
                           </div>
                           <button
                             onClick={() => handleDeleteDevice(device.id, device.name)}
-                            className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-sm font-medium"
+                            className="p-1 bg-red-600/20 hover:bg-red-600/40 text-red-300 rounded flex items-center justify-center"
                           >
-                            Delete
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
                           </button>
                         </div>
                       </div>
