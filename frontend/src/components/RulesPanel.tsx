@@ -1,24 +1,10 @@
 import { useState, useEffect } from 'react';
 import { TrafficRule, BandwidthRule } from '../types/metrics';
 import { apiService } from '../services/api';
+import { Cluster, Device, SyncPreview, ContainerStatus } from '../types/cluster';
 
 interface Props {
   rules: TrafficRule[];
-}
-
-interface Cluster {
-  id: number;
-  name: string;
-  active: boolean;
-}
-
-interface Device {
-  id: number;
-  name: string;
-  cluster_id: number;
-  status: string;
-  interface_name?: string;
-  ifb_device?: string;
 }
 
 interface ClientState {
@@ -30,13 +16,37 @@ interface ClientState {
   trafficRunning: boolean;
 }
 
+// Editing states
+interface ClusterEditState {
+  id: number | null; // null for new cluster
+  name: string;
+  description: string;
+  isNew: boolean;
+}
+
+interface DeviceEditState {
+  id: number | null; // null for new device
+  clusterId: number;
+  name: string;
+  deviceType: string;
+  isNew: boolean;
+}
+
 export default function RulesPanel({ rules }: Props) {
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [syncPreviews, setSyncPreviews] = useState<Map<number, SyncPreview>>(new Map());
   const [clientStates, setClientStates] = useState<Record<string, ClientState>>({});
   const [loading, setLoading] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [showModal, setShowModal] = useState(false);
+
+  // Editing states
+  const [editingCluster, setEditingCluster] = useState<ClusterEditState | null>(null);
+  const [editingDevice, setEditingDevice] = useState<DeviceEditState | null>(null);
+
+  // Container status
+  const [containerStatus, setContainerStatus] = useState<ContainerStatus | null>(null);
 
   // Load clusters and devices
   useEffect(() => {
@@ -45,21 +55,33 @@ export default function RulesPanel({ rules }: Props) {
         const clustersData = await apiService.getClusters();
         setClusters(clustersData);
 
-        // Load devices for all clusters (including offline ones)
+        // Load devices for all clusters
         const allDevices: Device[] = [];
         for (const cluster of clustersData) {
           const clusterDevices = await apiService.getDevices(cluster.id);
           allDevices.push(...clusterDevices);
         }
-
         setDevices(allDevices);
+
+        // Load sync previews for all clusters
+        const previews = new Map<number, SyncPreview>();
+        for (const cluster of clustersData) {
+          try {
+            const preview = await apiService.getSyncPreview(cluster.id);
+            if (preview.total_changes > 0) {
+              previews.set(cluster.id, preview);
+            }
+          } catch (err) {
+            console.error(`Failed to load sync preview for cluster ${cluster.id}:`, err);
+          }
+        }
+        setSyncPreviews(previews);
       } catch (err) {
         console.error('Failed to load clusters/devices:', err);
       }
     };
 
     loadData();
-    // Reload every 5 seconds to pick up new devices
     const interval = setInterval(loadData, 5000);
     return () => clearInterval(interval);
   }, []);
@@ -73,22 +95,18 @@ export default function RulesPanel({ rules }: Props) {
         const rule = rules.find(r => r.client === device.name);
         const existingState = prev[device.name];
 
-        // Helper to clean up bandwidth values: hide "1Gbit" or "1gbit", keep others
         const cleanBandwidth = (value?: string) => {
           if (!value) return '';
           const normalized = value.replace('Mbit', 'mbit');
-          // Hide unlimited bandwidth (1Gbit) from display
           if (normalized === '1gbit' || normalized === '1Gbit') return '';
           return normalized;
         };
 
         newStates[device.name] = {
-          // Preserve existing user input if it exists, otherwise use rule values
           upRate: existingState?.upRate !== undefined ? existingState.upRate : cleanBandwidth(rule?.upstream_rate),
           upCeil: existingState?.upCeil !== undefined ? existingState.upCeil : cleanBandwidth(rule?.upstream_ceil),
           downRate: existingState?.downRate !== undefined ? existingState.downRate : cleanBandwidth(rule?.downstream_rate || rule?.rate),
           downCeil: existingState?.downCeil !== undefined ? existingState.downCeil : cleanBandwidth(rule?.downstream_ceil || rule?.ceil),
-          // Preserve user-entered traffic amount and running state
           trafficAmount: existingState?.trafficAmount || '50M',
           trafficRunning: existingState?.trafficRunning || false,
         };
@@ -117,7 +135,7 @@ export default function RulesPanel({ rules }: Props) {
           return updated;
         });
       } catch (error) {
-        // Silently fail - traffic status is not critical
+        // Silently fail
       }
     };
 
@@ -125,6 +143,51 @@ export default function RulesPanel({ rules }: Props) {
     const interval = setInterval(checkTrafficStatus, 2000);
     return () => clearInterval(interval);
   }, []);
+
+  // Poll container status every 3 seconds
+  useEffect(() => {
+    const checkContainerStatus = async () => {
+      try {
+        const status = await apiService.getContainerStatus();
+        setContainerStatus(status);
+      } catch (error) {
+        // Silently fail
+      }
+    };
+
+    checkContainerStatus();
+    const interval = setInterval(checkContainerStatus, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const reloadData = async () => {
+    try {
+      const clustersData = await apiService.getClusters();
+      setClusters(clustersData);
+
+      const allDevices: Device[] = [];
+      for (const cluster of clustersData) {
+        const clusterDevices = await apiService.getDevices(cluster.id);
+        allDevices.push(...clusterDevices);
+      }
+      setDevices(allDevices);
+
+      const previews = new Map<number, SyncPreview>();
+      for (const cluster of clustersData) {
+        try {
+          const preview = await apiService.getSyncPreview(cluster.id);
+          if (preview.total_changes > 0) {
+            previews.set(cluster.id, preview);
+          }
+        } catch (err) {
+          console.error(`Failed to load sync preview for cluster ${cluster.id}:`, err);
+        }
+      }
+      setSyncPreviews(previews);
+    } catch (err) {
+      console.error('Failed to reload data:', err);
+    }
+  };
 
   const updateClientState = (clientName: string, field: keyof ClientState, value: string | boolean) => {
     setClientStates(prev => ({
@@ -147,7 +210,6 @@ export default function RulesPanel({ rules }: Props) {
 
       const state = clientStates[device.name];
 
-      // Default empty values to unlimited (1gbit)
       const rule: BandwidthRule = {
         interface: device.interface_name,
         client: device.name,
@@ -193,7 +255,6 @@ export default function RulesPanel({ rules }: Props) {
       const state = clientStates[deviceName];
 
       if (state.trafficRunning) {
-        // Stop traffic
         const response = await fetch(`http://localhost:8000/api/traffic/stop`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -207,13 +268,12 @@ export default function RulesPanel({ rules }: Props) {
 
         setMessage({ type: 'success', text: `Stopped traffic for ${deviceName}` });
       } else {
-        // Start traffic
         const response = await fetch(`http://localhost:8000/api/traffic/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             client: deviceName,
-            duration: 300,  // 5 minutes
+            duration: 300,
             bandwidth: state.trafficAmount
           })
         });
@@ -232,14 +292,174 @@ export default function RulesPanel({ rules }: Props) {
     }
   };
 
+  const handleAddCluster = () => {
+    setEditingCluster({
+      id: null,
+      name: '',
+      description: '',
+      isNew: true
+    });
+  };
+
+  const handleSaveCluster = async () => {
+    if (!editingCluster) return;
+
+    setLoading('cluster-edit');
+    setMessage(null);
+
+    try {
+      if (editingCluster.isNew) {
+        const newCluster = await apiService.createCluster({
+          name: editingCluster.name,
+          description: editingCluster.description,
+          active: true
+        });
+        setMessage({ type: 'success', text: `Cluster "${newCluster.name}" created` });
+      } else if (editingCluster.id !== null) {
+        await apiService.updateCluster(editingCluster.id, {
+          name: editingCluster.name,
+          description: editingCluster.description
+        });
+        setMessage({ type: 'success', text: `Cluster updated` });
+      }
+
+      setEditingCluster(null);
+      await reloadData();
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.response?.data?.detail || error.message });
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const handleCancelClusterEdit = () => {
+    setEditingCluster(null);
+  };
+
+  const handleAddDevice = (clusterId: number) => {
+    setEditingDevice({
+      id: null,
+      clusterId,
+      name: '',
+      deviceType: 'pc',
+      isNew: true
+    });
+  };
+
+  const handleSaveDevice = async () => {
+    if (!editingDevice) return;
+
+    setLoading('device-edit');
+    setMessage(null);
+
+    try {
+      const newDevice = await apiService.createDevice({
+        cluster_id: editingDevice.clusterId,
+        name: editingDevice.name,
+        device_type: editingDevice.deviceType
+      });
+      setMessage({ type: 'success', text: `Device "${newDevice.name}" created` });
+      setEditingDevice(null);
+      await reloadData();
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.response?.data?.detail || error.message });
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const handleCancelDeviceEdit = () => {
+    setEditingDevice(null);
+  };
+
+  const handleDeleteCluster = async (cluster: Cluster) => {
+    if (!confirm(`Delete cluster "${cluster.name}" and all its devices?`)) {
+      return;
+    }
+
+    setLoading(`cluster-${cluster.id}`);
+    setMessage(null);
+
+    try {
+      await apiService.deleteCluster(cluster.id);
+      setMessage({ type: 'success', text: `Cluster "${cluster.name}" deleted` });
+      await reloadData();
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.response?.data?.detail || error.message });
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const handleDeleteDevice = async (device: Device) => {
+    if (!confirm(`Delete device "${device.name}"?`)) {
+      return;
+    }
+
+    setLoading(`device-${device.id}`);
+    setMessage(null);
+
+    try {
+      await apiService.deleteDevice(device.id);
+      setMessage({ type: 'success', text: `Device "${device.name}" deleted` });
+      await reloadData();
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.response?.data?.detail || error.message });
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const handleSyncCluster = async (clusterId: number) => {
+    if (!confirm('Execute sync? This will create/destroy containers to match the desired state.')) {
+      return;
+    }
+
+    setLoading(`sync-${clusterId}`);
+    setMessage(null);
+
+    try {
+      const result = await apiService.executeSync(clusterId);
+      const summary = [
+        result.created.length > 0 ? `Created: ${result.created.length}` : null,
+        result.destroyed.length > 0 ? `Destroyed: ${result.destroyed.length}` : null,
+        result.errors.length > 0 ? `Errors: ${result.errors.length}` : null,
+      ].filter(Boolean).join(', ');
+
+      setMessage({ type: 'success', text: `Sync complete! ${summary || 'No changes'}` });
+      await reloadData();
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.response?.data?.detail || error.message });
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const handleKillAllContainers = async () => {
+    if (!confirm('Kill ALL client containers?\n\nThis will:\n1. Stop and remove ALL QC client containers\n2. Update all device statuses to "stopped"\n3. Leave networks intact (they will be reused on next sync)\n\nAre you sure?')) {
+      return;
+    }
+
+    setLoading('kill-all');
+    setMessage(null);
+
+    try {
+      const result = await apiService.killAllContainers();
+      setMessage({ type: 'success', text: `Killed ${result.containers_killed} containers successfully!` });
+      await reloadData();
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.response?.data?.detail || error.message });
+    } finally {
+      setLoading(null);
+    }
+  };
+
   const generateTcCommands = () => {
     const commands: string[] = [];
 
     rules.forEach(rule => {
-      // Find device to get IFB mapping
       const device = devices.find(d => d.name === rule.client);
 
-      // Downstream command (physical interface)
       const downRate = rule.downstream_rate || rule.rate || '1gbit';
       const downCeil = rule.downstream_ceil || rule.ceil || '1gbit';
       commands.push(
@@ -247,7 +467,6 @@ export default function RulesPanel({ rules }: Props) {
         `tc class change dev ${rule.interface} parent 1:1 classid 1:30 htb rate ${downRate} ceil ${downCeil}`
       );
 
-      // Upstream command (IFB device)
       if (device?.ifb_device && (rule.upstream_rate || rule.upstream_ceil)) {
         const upRate = rule.upstream_rate || '1gbit';
         const upCeil = rule.upstream_ceil || '1gbit';
@@ -257,7 +476,7 @@ export default function RulesPanel({ rules }: Props) {
         );
       }
 
-      commands.push(''); // Empty line between clients
+      commands.push('');
     });
 
     return commands.join('\n');
@@ -269,17 +488,33 @@ export default function RulesPanel({ rules }: Props) {
     setMessage({ type: 'success', text: 'TC commands copied to clipboard' });
   };
 
-  // Group devices by cluster
+  // Group devices by cluster - include all clusters even if they have no devices
   const devicesByCluster = new Map<number, { cluster: Cluster; devices: Device[] }>();
-  devices.forEach(device => {
-    const cluster = clusters.find(c => c.id === device.cluster_id);
-    if (!cluster) return;
 
-    if (!devicesByCluster.has(cluster.id)) {
-      devicesByCluster.set(cluster.id, { cluster, devices: [] });
-    }
-    devicesByCluster.get(cluster.id)!.devices.push(device);
+  // First, add all clusters
+  clusters.forEach(cluster => {
+    devicesByCluster.set(cluster.id, { cluster, devices: [] });
   });
+
+  // Then, add devices to their respective clusters
+  devices.forEach(device => {
+    const clusterEntry = devicesByCluster.get(device.cluster_id);
+    if (clusterEntry) {
+      clusterEntry.devices.push(device);
+    }
+  });
+
+  // Helper function to check if a container is running
+  const isContainerRunning = (containerName: string): boolean => {
+    if (!containerStatus) return false;
+    return containerStatus.running_containers.some(c => c.name === containerName && c.status === 'running');
+  };
+
+  // Get container statuses
+  const frontendRunning = isContainerRunning('frontend');
+  const backendRunning = isContainerRunning('backend');
+  const routerRunning = isContainerRunning('router');
+  const runningClientsCount = containerStatus?.devices.filter(d => d.status === 'running').length || 0;
 
   return (
     <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
@@ -287,59 +522,188 @@ export default function RulesPanel({ rules }: Props) {
         <h2 className="text-lg font-semibold text-white">
           Traffic Shaping Rules
         </h2>
-        {message && (
-          <span className={`text-sm ${
-            message.type === 'success' ? 'text-green-400' : 'text-red-400'
-          }`}>
-            {message.text}
-          </span>
-        )}
+        <div className="flex items-center gap-6">
+          {/* Container Status Monitor */}
+          <div className="flex items-center gap-3 text-xs text-slate-400">
+            <div className="flex items-center gap-1.5">
+              <div className={`h-2 w-2 rounded-full ${frontendRunning ? 'bg-green-500' : 'bg-red-500'}`}></div>
+              <span>Frontend</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className={`h-2 w-2 rounded-full ${backendRunning ? 'bg-green-500' : 'bg-red-500'}`}></div>
+              <span>Backend</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className={`h-2 w-2 rounded-full ${routerRunning ? 'bg-green-500' : 'bg-red-500'}`}></div>
+              <span>Router</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className={`h-2 w-2 rounded-full ${runningClientsCount > 0 ? 'bg-green-500' : 'bg-red-500'}`}></div>
+              <span>Clients ({runningClientsCount})</span>
+            </div>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex items-center gap-4">
+            <button
+              onClick={handleKillAllContainers}
+              disabled={loading === 'kill-all'}
+              className="text-sm text-red-400 hover:text-red-300 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loading === 'kill-all' ? 'Killing...' : 'Kill All Containers'}
+            </button>
+            <button
+              onClick={handleAddCluster}
+              disabled={loading !== null || editingCluster !== null}
+              className="text-sm text-blue-400 hover:text-blue-300 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              + Add Cluster
+            </button>
+            <button
+              onClick={() => setShowModal(true)}
+              className="text-sm text-blue-400 hover:text-blue-300"
+            >
+              Copy Rules
+            </button>
+          </div>
+        </div>
       </div>
 
-      {devices.length === 0 ? (
-        <div className="text-center text-slate-400 py-8">
-          No running devices found. Create and sync devices in the Cluster Manager.
-        </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-700">
-                <th className="text-left py-2 px-2 text-slate-300 font-medium text-sm w-auto">Device</th>
-                <th className="text-center py-2 px-2 text-slate-300 font-medium text-sm whitespace-nowrap">Status</th>
-                <th className="text-center py-2 px-2 text-slate-300 font-medium text-sm whitespace-nowrap">Interface</th>
-                <th className="text-center py-2 px-1 text-orange-400 font-medium text-sm whitespace-nowrap" colSpan={2}>
-                  ↑ Upstream
-                </th>
-                <th className="text-center py-2 px-1 text-green-400 font-medium text-sm whitespace-nowrap" colSpan={2}>
-                  ↓ Downstream
-                </th>
-                <th className="text-center py-2 px-1 text-purple-400 font-medium text-sm whitespace-nowrap">
-                  Traffic
-                </th>
-                <th className="text-center py-2 px-2 text-slate-300 font-medium text-sm whitespace-nowrap">Actions</th>
-              </tr>
-              <tr className="border-b border-slate-700 text-xs">
-                <th className="text-left py-1 px-2"></th>
-                <th className="text-center py-1 px-2"></th>
-                <th className="text-center py-1 px-2"></th>
-                <th className="text-center py-1 px-1 text-slate-400 whitespace-nowrap">Rate</th>
-                <th className="text-center py-1 px-1 text-slate-400 whitespace-nowrap">Ceil</th>
-                <th className="text-center py-1 px-1 text-slate-400 whitespace-nowrap">Rate</th>
-                <th className="text-center py-1 px-1 text-slate-400 whitespace-nowrap">Ceil</th>
-                <th className="text-center py-1 px-1 text-slate-400 whitespace-nowrap">Amount</th>
-                <th className="text-center py-1 px-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {Array.from(devicesByCluster.values()).map(({ cluster, devices: clusterDevices }) => (
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-slate-700">
+              <th className="text-left py-2 px-2 text-slate-300 font-medium text-sm w-auto">Device</th>
+              <th className="text-center py-2 px-2 text-slate-300 font-medium text-sm whitespace-nowrap">Type</th>
+              <th className="text-center py-2 px-2 text-slate-300 font-medium text-sm whitespace-nowrap">Status</th>
+              <th className="text-center py-2 px-2 text-slate-300 font-medium text-sm whitespace-nowrap">Interface</th>
+              <th className="text-center py-2 px-1 text-orange-400 font-medium text-sm whitespace-nowrap" colSpan={2}>
+                ↑ Upstream
+              </th>
+              <th className="text-center py-2 px-1 text-green-400 font-medium text-sm whitespace-nowrap" colSpan={2}>
+                ↓ Downstream
+              </th>
+              <th className="text-center py-2 px-1 text-purple-400 font-medium text-sm whitespace-nowrap">
+                Traffic
+              </th>
+              <th className="text-center py-2 px-2 text-slate-300 font-medium text-sm whitespace-nowrap">Actions</th>
+            </tr>
+            <tr className="border-b border-slate-700 text-xs">
+              <th className="text-left py-1 px-2"></th>
+              <th className="text-center py-1 px-2"></th>
+              <th className="text-center py-1 px-2"></th>
+              <th className="text-center py-1 px-2"></th>
+              <th className="text-center py-1 px-1 text-slate-400 whitespace-nowrap">Rate</th>
+              <th className="text-center py-1 px-1 text-slate-400 whitespace-nowrap">Ceil</th>
+              <th className="text-center py-1 px-1 text-slate-400 whitespace-nowrap">Rate</th>
+              <th className="text-center py-1 px-1 text-slate-400 whitespace-nowrap">Ceil</th>
+              <th className="text-center py-1 px-1 text-slate-400 whitespace-nowrap">Amount</th>
+              <th className="text-center py-1 px-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {Array.from(devicesByCluster.values()).map(({ cluster, devices: clusterDevices }) => {
+              const syncPreview = syncPreviews.get(cluster.id);
+              const needsSync = syncPreview && syncPreview.total_changes > 0;
+
+              return (
                 <>
                   {/* Cluster header row */}
-                  <tr key={`cluster-${cluster.id}`} className="bg-slate-700">
-                    <td colSpan={9} className="py-2 px-2 text-left">
-                      <span className="font-medium text-slate-200">{cluster.name}</span>
+                  <tr key={`cluster-${cluster.id}`} className="group bg-slate-700">
+                    <td colSpan={10} className="py-2 px-2">
+                      <div className="flex items-center gap-3">
+                        <span className="font-medium text-slate-200">{cluster.name}</span>
+                        <button
+                          onClick={() => handleAddDevice(cluster.id)}
+                          disabled={loading !== null}
+                          className="text-blue-400 hover:text-blue-300 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          + Device
+                        </button>
+                        {needsSync && (
+                          <button
+                            onClick={() => handleSyncCluster(cluster.id)}
+                            disabled={loading === `sync-${cluster.id}`}
+                            className="text-yellow-400 hover:text-yellow-300 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                            title={`Sync needed: ${syncPreview.total_changes} changes`}
+                          >
+                            {loading === `sync-${cluster.id}` ? 'Syncing...' : '⟳ Sync'}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleDeleteCluster(cluster)}
+                          disabled={loading === `cluster-${cluster.id}`}
+                          className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
+                          title="Delete cluster"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
+                      </div>
                     </td>
                   </tr>
+
+                  {/* Device editing row */}
+                  {editingDevice && editingDevice.clusterId === cluster.id && (
+                    <tr className="bg-blue-900/20 border-b border-blue-500/50">
+                      <td className="py-1.5 px-2">
+                        <input
+                          type="text"
+                          value={editingDevice.name}
+                          onChange={(e) => setEditingDevice({ ...editingDevice, name: e.target.value })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveDevice();
+                            if (e.key === 'Escape') handleCancelDeviceEdit();
+                          }}
+                          placeholder="Device name"
+                          className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-sm"
+                          autoFocus
+                        />
+                      </td>
+                      <td className="py-1.5 px-2">
+                        <select
+                          value={editingDevice.deviceType}
+                          onChange={(e) => setEditingDevice({ ...editingDevice, deviceType: e.target.value })}
+                          className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-sm"
+                        >
+                          <option value="pc">PC</option>
+                          <option value="mobile">Mobile</option>
+                          <option value="server">Server</option>
+                          <option value="iot">IoT</option>
+                        </select>
+                      </td>
+                      <td colSpan={7} className="py-1.5 px-2 text-center text-slate-400 text-xs">
+                        Disabled until saved
+                      </td>
+                      <td className="py-1.5 px-2">
+                        <div className="flex gap-1 justify-center">
+                          <button
+                            onClick={handleSaveDevice}
+                            disabled={!editingDevice.name || loading === 'device-edit'}
+                            className="bg-green-600 hover:bg-green-700 disabled:bg-green-800 text-white text-xs font-medium py-1 px-2 rounded"
+                          >
+                            {loading === 'device-edit' ? 'Saving...' : 'Save'}
+                          </button>
+                          <button
+                            onClick={handleCancelDeviceEdit}
+                            className="bg-slate-600 hover:bg-slate-700 text-white text-xs font-medium py-1 px-2 rounded"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+
+                  {/* No devices placeholder */}
+                  {clusterDevices.length === 0 && (!editingDevice || editingDevice.clusterId !== cluster.id) && (
+                    <tr className="border-b border-slate-700/50">
+                      <td colSpan={10} className="py-3 px-2 text-center text-slate-400 text-sm italic">
+                        No devices. Click "+ Device" to add one.
+                      </td>
+                    </tr>
+                  )}
 
                   {/* Device rows */}
                   {clusterDevices.map((device) => {
@@ -350,8 +714,8 @@ export default function RulesPanel({ rules }: Props) {
                     const isLoading = loading === device.name;
                     const isOnline = device.status === 'running';
                     const isDisabled = isLoading || !isOnline;
+                    const isUnsynced = !device.interface_name && device.status !== 'error';
 
-                    // Status display
                     let statusText = 'Offline';
                     let statusColor = 'text-red-400';
                     if (device.status === 'running') {
@@ -369,23 +733,42 @@ export default function RulesPanel({ rules }: Props) {
                     }
 
                     return (
-                      <tr key={device.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-                        {/* Device */}
+                      <tr
+                        key={device.id}
+                        className={`group border-b border-slate-700/50 hover:bg-slate-700/30 ${
+                          isUnsynced ? 'bg-amber-900/20' : ''
+                        }`}
+                      >
                         <td className="py-1.5 px-2 text-left">
-                          <div className="font-medium text-blue-400">{device.name}</div>
+                          <div className="flex items-center gap-2">
+                            <div className="font-medium text-blue-400">{device.name}</div>
+                            <button
+                              onClick={() => handleDeleteDevice(device)}
+                              disabled={loading === `device-${device.id}`}
+                              className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
+                              title="Delete device"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                            </button>
+                          </div>
                         </td>
 
-                        {/* Status */}
+                        <td className="py-1.5 px-2 text-center">
+                          <span className="text-xs bg-slate-600 px-2 py-1 rounded text-slate-300">
+                            {device.device_type}
+                          </span>
+                        </td>
+
                         <td className="py-1.5 px-2 text-center whitespace-nowrap">
                           <div className={`font-medium text-xs ${statusColor}`}>{statusText}</div>
                         </td>
 
-                        {/* Interface */}
                         <td className="py-1.5 px-2 text-center whitespace-nowrap">
                           <div className="text-xs text-slate-400">{device.interface_name || '-'}</div>
                         </td>
 
-                        {/* Upstream Rate */}
                         <td className="py-1.5 px-1 text-center">
                           <input
                             type="text"
@@ -397,7 +780,6 @@ export default function RulesPanel({ rules }: Props) {
                           />
                         </td>
 
-                        {/* Upstream Ceil */}
                         <td className="py-1.5 px-1 text-center">
                           <input
                             type="text"
@@ -409,7 +791,6 @@ export default function RulesPanel({ rules }: Props) {
                           />
                         </td>
 
-                        {/* Downstream Rate */}
                         <td className="py-1.5 px-1 text-center">
                           <input
                             type="text"
@@ -421,7 +802,6 @@ export default function RulesPanel({ rules }: Props) {
                           />
                         </td>
 
-                        {/* Downstream Ceil */}
                         <td className="py-1.5 px-1 text-center">
                           <input
                             type="text"
@@ -433,7 +813,6 @@ export default function RulesPanel({ rules }: Props) {
                           />
                         </td>
 
-                        {/* Traffic Amount */}
                         <td className="py-1.5 px-1 text-center">
                           <input
                             type="text"
@@ -445,13 +824,12 @@ export default function RulesPanel({ rules }: Props) {
                           />
                         </td>
 
-                        {/* Action Buttons */}
                         <td className="py-1.5 px-2 text-center">
                           <div className="flex gap-1 justify-center">
                             <button
                               onClick={() => handleApply(device)}
                               disabled={isDisabled}
-                              className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white text-xs font-medium py-1 px-2 rounded transition-colors"
+                              className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-800 text-white text-xs font-medium py-1 px-2 rounded transition-colors"
                               title="Apply rule"
                             >
                               Apply
@@ -469,8 +847,8 @@ export default function RulesPanel({ rules }: Props) {
                               disabled={isDisabled}
                               className={`${
                                 state.trafficRunning
-                                  ? 'bg-red-600 hover:bg-red-700 disabled:bg-red-800'
-                                  : 'bg-purple-600 hover:bg-purple-700 disabled:bg-purple-800'
+                                  ? 'bg-red-600 hover:bg-red-700 disabled:bg-slate-800'
+                                  : 'bg-purple-600 hover:bg-purple-700 disabled:bg-slate-800'
                               } text-white text-xs font-medium py-1 px-2 rounded transition-colors`}
                               title={state.trafficRunning ? 'Stop traffic' : 'Start traffic'}
                             >
@@ -482,24 +860,75 @@ export default function RulesPanel({ rules }: Props) {
                     );
                   })}
                 </>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+              );
+            })}
 
-      <div className="mt-4 flex items-center justify-between">
+            {/* Cluster editing row */}
+            {editingCluster && (
+              <tr className="bg-blue-900/20 border-b border-blue-500/50">
+                <td className="py-1.5 px-2" colSpan={2}>
+                  <input
+                    type="text"
+                    value={editingCluster.name}
+                    onChange={(e) => setEditingCluster({ ...editingCluster, name: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSaveCluster();
+                      if (e.key === 'Escape') handleCancelClusterEdit();
+                    }}
+                    placeholder="Cluster name"
+                    className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-sm"
+                    autoFocus
+                  />
+                </td>
+                <td className="py-1.5 px-2" colSpan={6}>
+                  <input
+                    type="text"
+                    value={editingCluster.description}
+                    onChange={(e) => setEditingCluster({ ...editingCluster, description: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSaveCluster();
+                      if (e.key === 'Escape') handleCancelClusterEdit();
+                    }}
+                    placeholder="Description (optional)"
+                    className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-sm"
+                  />
+                </td>
+                <td className="py-1.5 px-2" colSpan={2}>
+                  <div className="flex gap-1 justify-center">
+                    <button
+                      onClick={handleSaveCluster}
+                      disabled={!editingCluster.name || loading === 'cluster-edit'}
+                      className="bg-green-600 hover:bg-green-700 disabled:bg-green-800 text-white text-xs font-medium py-1 px-2 rounded"
+                    >
+                      {loading === 'cluster-edit' ? 'Saving...' : 'Save'}
+                    </button>
+                    <button
+                      onClick={handleCancelClusterEdit}
+                      className="bg-slate-600 hover:bg-slate-700 text-white text-xs font-medium py-1 px-2 rounded"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="mt-4 flex items-end justify-between">
         <div className="text-xs text-slate-400">
           <p>• Shaping: Use mbit format (10mbit, 50mbit, 100mbit) for Rate and Ceil</p>
           <p>• Traffic: Use M format (10M, 50M, 100M) for iperf3 bandwidth</p>
           <p>• Rate = guaranteed minimum, Ceil = maximum burst</p>
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="text-sm text-blue-400 hover:text-blue-300 underline whitespace-nowrap"
-        >
-          Copy Rules
-        </button>
+        {message && (
+          <span className={`text-sm ${
+            message.type === 'success' ? 'text-green-400' : 'text-red-400'
+          }`}>
+            {message.text}
+          </span>
+        )}
       </div>
 
       {/* Modal */}

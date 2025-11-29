@@ -665,11 +665,29 @@ async def get_container_status() -> Dict:
     try:
         running = container_manager.get_running_containers()
 
+        # Also get infrastructure containers (frontend, backend, router)
+        infrastructure_containers = []
+        for container_name in ["frontend", "backend", "router"]:
+            try:
+                container = container_manager.client.containers.get(container_name)
+                infrastructure_containers.append({
+                    "name": container.name,
+                    "status": container.status,
+                    "id": container.id[:12],
+                    "created": container.attrs['Created']
+                })
+            except:
+                # Container doesn't exist or isn't running
+                pass
+
+        # Combine client and infrastructure containers
+        all_containers = running + infrastructure_containers
+
         # Get all devices from active clusters
         active_devices = db_service.get_all_active_cluster_devices()
 
         return {
-            "running_containers": running,
+            "running_containers": all_containers,
             "devices": [
                 {
                     "id": d.id,
