@@ -1,6 +1,7 @@
 import { useSSE } from '../hooks/useSSE';
 import BandwidthChart from './BandwidthChart';
 import RulesPanel from './RulesPanel';
+import DevicePills from './DevicePills';
 
 export default function Dashboard() {
   const { data, error, isConnected } = useSSE();
@@ -32,16 +33,8 @@ export default function Dashboard() {
 
   return (
     <div className="max-w-7xl mx-auto py-8">
-      {/* Connection Status */}
-      <div className="mb-6 flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          <div className={`h-3 w-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
-          <span className="text-sm text-slate-400">
-            {isConnected ? 'Live' : 'Disconnected'}
-            {data && ` • Last update: ${new Date(data.timestamp * 1000).toLocaleTimeString()}`}
-          </span>
-        </div>
-      </div>
+      {/* Device Monitoring Pills */}
+      <DevicePills data={data} />
 
       {/* Main Grid */}
       <div className="grid grid-cols-1 gap-6">
