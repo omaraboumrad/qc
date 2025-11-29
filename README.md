@@ -11,25 +11,22 @@ A Docker-based network traffic shaping playgroun with dynamic cluster and device
 - **Real-Time Monitoring** - Live bandwidth charts with upstream/downstream metrics for all active devices
 - **Traffic Shaping Controls** - Apply bandwidth limits (rate/ceil) via HTB qdisc on a per-device basis
 - **Traffic Generation** - Built-in iperf3 integration for bandwidth testing
-- **Container Orchestration** - Automatic Docker container and network provisioning
-- **RESTful API** - Full FastAPI backend with Server-Sent Events for real-time metrics
-- **SQLite Database** - Persistent storage for clusters, devices, and traffic rules
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────┐
-│             React Frontend (Port 5173)          │
+│              Frontend (Port 3000)               │
 │  - Cluster Manager (CRUD clusters/devices)      │
 │  - Bandwidth Chart (Real-time metrics)          │
 │  - Rules Panel (Traffic shaping controls)       │
 └────────────────┬────────────────────────────────┘
-                 │ REST API + SSE
+                 │
 ┌────────────────▼────────────────────────────────┐
-│          FastAPI Backend (Port 8000)            │
+│              Backend (Port 8000)                │
 │  - Cluster/Device Management API                │
 │  - Traffic Control API (tc commands)            │
-│  - Metrics Collection & SSE Streaming           │
+│  - Metrics Collection                           │
 │  - Sync Service (Docker orchestration)          │
 └────────────────┬────────────────────────────────┘
                  │ Docker SDK
@@ -53,8 +50,8 @@ docker compose up -d
 This starts:
 - **Router** - Traffic shaping with HTB qdisc and iperf3 servers
 - **InfluxDB** - Time-series metrics storage
-- **Backend** - FastAPI server at `http://localhost:8000`
-- **Frontend** - React UI at `http://localhost:3000`
+- **Backend** - Server at `http://localhost:8000`
+- **Frontend** - UI at `http://localhost:3000`
 
 ### 2. Create Your First Cluster
 
